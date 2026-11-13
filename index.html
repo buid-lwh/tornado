@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>토네이도 매수후보</title>
+<title>토네이도</title>
 <style>
   :root {
     --bg: #14161c; --card: #1d2029; --line: #2b2f3a; --text: #eef0f4; --sub: #9aa1b0;
@@ -41,6 +41,8 @@
   .grade { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 999px; }
   .gA { background: rgba(242,184,75,.15); color: var(--gold); }
   .gB { background: rgba(111,195,168,.15); color: var(--b); }
+  .gS { background: rgba(76,141,255,.15); color: var(--down); }
+  .tab.sell.on { border-color: var(--down); color: var(--down); }
   .price { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
   .close { font-size: 20px; font-weight: 700; }
   .chg { font-size: 14px; font-weight: 600; }
@@ -60,7 +62,7 @@
 <body>
 <header>
   <div class="row">
-    <h1>🌪 토네이도 <span>매수후보</span></h1>
+    <h1>🌪 <span>토네이도</span></h1>
     <select id="date" aria-label="날짜 선택"></select>
     <button id="reload" aria-label="새로고침">↻</button>
   </div>
@@ -69,6 +71,7 @@
     <div class="tab on" data-g="all">전체 <span id="nAll"></span></div>
     <div class="tab" data-g="A">A 완전통과 <span id="nA"></span></div>
     <div class="tab" data-g="B">B 중간이상 <span id="nB"></span></div>
+    <div class="tab sell" data-g="S">매도 <span id="nS"></span></div>
   </div>
 </header>
 <main>
@@ -76,6 +79,7 @@
   <div class="note">
     · 조건: 종가 &gt; 5 &gt; 10 &gt; 20 &gt; 60일선(지수) 정배열 + 토네이도 1·2번선 겹친 띠를 양봉이 돌파<br>
     · 결과에 나온 종목 = 다음 거래일 매수 후보 (평일 15:50 이후 자동 갱신)<br>
+    · 매도: 최근 약 3개월 안에 매수 신호가 났던 종목 중, 오늘 5일선이 10일선 아래로 내려간(데드크로스) 종목<br>
     · 투자 판단은 차트를 직접 확인한 뒤 하세요.
   </div>
 </main>
@@ -113,8 +117,11 @@ async function load(day) {
 function render() {
   const all = data["종목"] || [];
   const A = all.filter((x) => x["등급"].startsWith("A")), B = all.filter((x) => x["등급"].startsWith("B"));
+  const S = data["매도"] || [];
   $("#nAll").textContent = all.length; $("#nA").textContent = A.length; $("#nB").textContent = B.length;
+  $("#nS").textContent = data["매도"] ? S.length : "";
   $("#meta").textContent = `기준일 ${data["기준일"]} · ${data["검색종목수"].toLocaleString()}종목 검색 · ${data["생성시각"]} 갱신`;
+  if (grade === "S") return renderSell(S, !!data["매도"]);
   const rows = grade === "A" ? A : grade === "B" ? B : all;
   if (!rows.length) {
     $("#list").innerHTML = `<div class="empty">조건에 맞는 종목이 없습니다.</div>`;
@@ -141,6 +148,42 @@ function render() {
         <div><b>1번선</b>${x["1번선(BB)"]}</div>
         <div><b>묶음 간격</b>${x["두 묶음 간격(%)"]}%</div>
         <div style="grid-column:1/-1"><b>2번선</b>${x["2번선(Env)"]}</div>
+      </div>
+      <div class="links">
+        <a href="https://m.stock.naver.com/domestic/stock/${x["종목코드"]}/total" target="_blank" rel="noopener">네이버 차트</a>
+        <a href="https://finance.daum.net/quotes/A${x["종목코드"]}" target="_blank" rel="noopener">다음 증권</a>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderSell(rows, has) {
+  if (!rows.length) {
+    $("#list").innerHTML = `<div class="empty">${has ? "오늘 매도할 종목이 없습니다." : "이 날짜 결과에는 매도 정보가 없습니다."}</div>`;
+    return;
+  }
+  $("#list").innerHTML = rows.map((x) => {
+    const c = x["등락률(%)"], cls = c > 0 ? "var(--up)" : c < 0 ? "var(--down)" : "var(--sub)";
+    const p = x["수익률(%)"], pcls = p > 0 ? "var(--up)" : p < 0 ? "var(--down)" : "var(--sub)";
+    return `<div class="card">
+      <div class="top">
+        <div class="name">${x["종목명"]}<span class="code">${x["종목코드"]}</span></div>
+        <span class="grade gS">매도 · 5/10 데드</span>
+      </div>
+      <div class="price">
+        <span class="close">${won(x["오늘 종가"])}</span>
+        <span class="chg" style="color:${cls}">${c > 0 ? "+" : ""}${c}%</span>
+        <span class="mkt">${x["시장"]}</span>
+      </div>
+      <div class="grid">
+        <div><b>매수 신호일</b>${x["매수 신호일"].slice(5)}</div>
+        <div><b>신호 등급</b>${(x["신호 등급"] || "").slice(0, 1)}급</div>
+        <div><b>매수가</b>${won(x["매수가(신호 다음날 시가)"])}</div>
+        <div><b>수익률</b><span style="color:${pcls}">${p == null ? "-" : (p > 0 ? "+" : "") + p + "%"}</span></div>
+        <div><b>보유일</b>${x["보유일(영업일)"]}일</div>
+        <div><b>신호 횟수</b>${x["신호 횟수"]}회</div>
+        <div><b>5일선</b>${won(x["5일선"])}</div>
+        <div><b>10일선</b>${won(x["10일선"])}</div>
       </div>
       <div class="links">
         <a href="https://m.stock.naver.com/domestic/stock/${x["종목코드"]}/total" target="_blank" rel="noopener">네이버 차트</a>

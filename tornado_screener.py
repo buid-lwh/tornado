@@ -11,6 +11,12 @@
              B급 중간이상 - 양봉, 시가 < 띠 중간 ≤ 종가 ≤ 띠 맨 위
  → 결과에 나온 종목 = "내일 매수" 후보
 
+[매도 조건]
+ 오늘 5일선이 10일선 아래로 내려감 (5·10일선 데드크로스, 종가 기준)
+ + 최근 SELL_LOOKBACK 영업일(약 3개월) 안에 매수 신호가 났던 종목
+ + 그 매수 신호 뒤 처음 나온 데드크로스 (이미 앞서 데드크로스가 났으면 이미 판 것으로 보고 제외)
+ → 결과에 나온 종목 = "매도" 대상 (오늘 종가 또는 내일 시가에 매도)
+
  BBandsUP(N, 2) = (고+저+종)/3 의 N일 단순평균 + 2 × 표준편차  (영웅문과 소수점까지 일치 확인)
 
 [두 가지 모드]
@@ -39,6 +45,8 @@ GAP_TOL = 0.02      # 겹침 판정: 1번선 묶음과 2번선 묶음이 서로 
                     #   더 엄격하게 → 0.01, 느슨하게 → 0.03
 SIGNAL_DAYS = 1     # 전 종목 검색: 1 = 오늘 신호만, 2 = 어제·오늘 신호까지
 WORKERS = 8         # 동시 다운로드 수 (오류 많으면 4로 낮추기)
+
+SELL_LOOKBACK = 60  # 매도 대상: 최근 며칠(영업일) 안에 매수 신호가 났던 종목까지 볼지 (20 = 1개월, 60 = 3개월)
 
 VOL_MIN = 0         # 거래량 조건: 0 = 안 씀, 1.5 = 20일 평균의 1.5배 이상만 (통계 결과 보고 정하기)
 
@@ -143,7 +151,38 @@ def compute(df):
     if VOL_MIN:                                  # 거래량 조건 (오늘 거래량 ≥ 20일 평균 × VOL_MIN)
         df["signal"] &= df["vol_ratio"] >= VOL_MIN
     df["chg"] = (c / pc - 1) * 100
+
+    # 매도 : 5일선이 10일선 아래로 내려온 날 (데드크로스)
+    df["dead"] = (df["ma5"] < df["ma10"]) & (df["ma5"].shift(1) >= df["ma10"].shift(1))
     return df
+
+
+def sell_row(df):
+    """오늘이 매도일(매수 신호 뒤 첫 5·10 데드크로스)이면 매도 정보 dict, 아니면 None"""
+    n = len(df)
+    if n < 3 or not df["dead"].iloc[-1]:
+        return None
+    dead_prev = np.where(df["dead"].values[:n - 1])[0]
+    after = dead_prev[-1] + 1 if len(dead_prev) else 0      # 직전 데드크로스 이후 신호만 (그 전 것은 이미 매도)
+    sig = np.where(df["signal"].values[:n - 1])[0]
+    sig = sig[sig >= max(after, n - 1 - SELL_LOOKBACK)]
+    if not len(sig):
+        return None
+    i = sig[0]                                               # 이번 보유의 첫 매수 신호
+    buy = df["Open"].iloc[i + 1]
+    r = df.iloc[-1]
+    return {
+        "매수 신호일": df.index[i].date(),
+        "신호 등급": df["grade"].iloc[i],
+        "신호 횟수": int(len(sig)),
+        "매수가(신호 다음날 시가)": int(buy) if buy > 0 else None,
+        "오늘 종가": int(r["Close"]),
+        "등락률(%)": round(r["chg"], 2),
+        "수익률(%)": round((r["Close"] / buy - 1) * 100, 2) if buy > 0 else None,
+        "보유일(영업일)": int(n - 1 - i),
+        "5일선": int(r["ma5"]),
+        "10일선": int(r["ma10"]),
+    }
 
 
 def _download(code, start):
@@ -312,7 +351,7 @@ def scan_all():
         print(f"검색 대상 {len(u)}종목 · 처음이라 전체 데이터를 받아 저장합니다 (20~40분, 한 번만)…")
     else:
         print(f"검색 대상 {len(u)}종목 · 저장된 데이터에 오늘 시세만 붙입니다 (1~2분)…")
-    rows, fails = [], 0
+    rows, sells, fails = [], [], 0
     with ThreadPoolExecutor(WORKERS) as ex:
         futs = {ex.submit(fast_fetch, r, trade_day): r for r in u.itertuples()}
         for i, f in enumerate(as_completed(futs), 1):
@@ -331,17 +370,26 @@ def scan_all():
                     rows.append({"시장": r.시장, "종목코드": r.Code, "종목명": r.Name,
                                  "신호일": df.index[-k].date(), **row_of(df, -k)})
                     break
+            s = sell_row(df)
+            if s:
+                sells.append({"시장": r.시장, "종목코드": r.Code, "종목명": r.Name, **s})
 
     out = pd.DataFrame(rows)
-    if out.empty:
-        print(f"\n조건에 맞는 종목이 없습니다. (데이터 실패 {fails}건)")
-        return
-    out = out.drop(columns="정배열")
-    out = out.sort_values(["등급", "두 묶음 간격(%)", "등락률(%)"], ascending=[True, True, False])
-    fname = f"토네이도_매수후보_{dt.date.today():%Y%m%d}.xlsx"
-    out.to_excel(fname, index=False)
-    print(out.to_string(index=False))
-    print(f"\n{len(out)}종목 → {fname} 저장 (데이터 실패 {fails}건)")
+    if len(out):
+        out = out.drop(columns="정배열")
+        out = out.sort_values(["등급", "두 묶음 간격(%)", "등락률(%)"], ascending=[True, True, False])
+    sell = pd.DataFrame(sells)
+    if len(sell):
+        sell = sell.sort_values("매수 신호일")
+    print(f"\n■ 매수 후보 (내일 매수) : {len(out)}종목")
+    print(out.to_string(index=False) if len(out) else "   없음")
+    print(f"\n■ 매도 대상 (5·10일선 데드크로스, 최근 {SELL_LOOKBACK}영업일 안 매수신호 종목) : {len(sell)}종목")
+    print(sell.to_string(index=False) if len(sell) else "   없음")
+    fname = f"토네이도_매수매도_{dt.date.today():%Y%m%d}.xlsx"
+    with pd.ExcelWriter(fname) as w:
+        (out if len(out) else pd.DataFrame({"결과": ["매수 후보 없음"]})).to_excel(w, sheet_name="매수후보", index=False)
+        (sell if len(sell) else pd.DataFrame({"결과": ["매도 대상 없음"]})).to_excel(w, sheet_name="매도대상", index=False)
+    print(f"\n→ {fname} 저장 (매수 {len(out)} · 매도 {len(sell)}종목, 데이터 실패 {fails}건)")
 
 
 STOP_LOSS = 0.05    # 매도 규칙 시험: 손절 -5%
