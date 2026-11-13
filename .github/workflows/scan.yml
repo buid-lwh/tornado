@@ -1,0 +1,54 @@
+name: 토네이도 매수후보 검색
+
+on:
+  schedule:
+    - cron: "50 6 * * 1-5"   # 평일 15:50 (한국시간) = 06:50 UTC
+  workflow_dispatch:          # Actions 화면에서 'Run workflow'로 바로 실행
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 패키지 설치
+        run: pip install -q finance-datareader pandas openpyxl requests
+
+      - name: 저장된 주가 데이터 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: data_cache
+          key: price-cache-${{ github.run_id }}
+          restore-keys: price-cache-
+
+      - name: 전 종목 검색
+        run: python cloud_scan.py
+
+      - name: 주가 데이터 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data_cache
+          key: price-cache-${{ github.run_id }}
+
+      - name: 결과 올리기
+        run: |
+          git config user.name "tornado-bot"
+          git config user.email "tornado-bot@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || git commit -m "검색 결과 $(date +%Y-%m-%d)"
+          git push
