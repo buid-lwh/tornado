@@ -74,7 +74,7 @@ def main():
     u = get_universe()
     trade_day = ts.last_trade_day()
     print(f"검색 대상 {len(u)}종목 · 기준일 {trade_day.date()}")
-    rows, sells, fails = [], [], 0
+    rows, sells, warns, fails = [], [], [], 0
     with ThreadPoolExecutor(ts.WORKERS) as ex:
         futs = {ex.submit(ts.fast_fetch, r, trade_day): r for r in u.itertuples()}
         for i, f in enumerate(as_completed(futs), 1):
@@ -99,9 +99,14 @@ def main():
             if s:
                 row = {"시장": r.시장, "종목코드": r.Code, "종목명": r.Name, **s}
                 sells.append({key: clean(val) for key, val in row.items()})
+            w = ts.warn_row(df) if ts.WARN_GAP else None
+            if w:
+                row = {"시장": r.시장, "종목코드": r.Code, "종목명": r.Name, **w}
+                warns.append({key: clean(val) for key, val in row.items()})
 
     rows.sort(key=lambda x: (x["등급"], x["두 묶음 간격(%)"], -x["등락률(%)"]))
     sells.sort(key=lambda x: x["매수 신호일"])
+    warns.sort(key=lambda x: x["5·10 간격(%)"])
     now = dt.datetime.now()
     result = {
         "기준일": trade_day.date().isoformat(),
@@ -109,9 +114,10 @@ def main():
         "검색종목수": int(len(u)),
         "데이터실패": fails,
         "조건": {"GAP_TOL": ts.GAP_TOL, "SIGNAL_DAYS": ts.SIGNAL_DAYS, "VOL_MIN": ts.VOL_MIN,
-                 "SELL_LOOKBACK": ts.SELL_LOOKBACK},
+                 "SELL_LOOKBACK": ts.SELL_LOOKBACK, "WARN_GAP": ts.WARN_GAP},
         "종목": rows,
         "매도": sells,
+        "매도주의": warns,
     }
     if fails > len(u) * 0.5:
         sys.exit(f"데이터 실패가 너무 많아({fails}건) 결과를 저장하지 않습니다.")
@@ -129,7 +135,7 @@ def main():
     days = days[:KEEP_DAYS]
     with open(os.path.join(OUT_DIR, "index.json"), "w", encoding="utf-8") as fp:
         json.dump({"dates": days}, fp)
-    print(f"\n매수 {len(rows)} · 매도 {len(sells)}종목 → data/{day}.json 저장 (데이터 실패 {fails}건)")
+    print(f"\n매수 {len(rows)} · 매도 {len(sells)} · 주의 {len(warns)}종목 → data/{day}.json 저장 (데이터 실패 {fails}건)")
 
 
 if __name__ == "__main__":

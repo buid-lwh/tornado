@@ -16,6 +16,9 @@
  + 최근 SELL_LOOKBACK 영업일(약 3개월) 안에 매수 신호가 났던 종목
  + 그 매수 신호 뒤 처음 나온 데드크로스 (이미 앞서 데드크로스가 났으면 이미 판 것으로 보고 제외)
  → 결과에 나온 종목 = "매도" 대상 (오늘 종가 또는 내일 시가에 매도)
+[매도 주의]
+ 보유 중(위 매도 대상 기준)인 종목의 5일선이 10일선 위 WARN_GAP(1%) 이내로 좁혀지며 내려옴
+ → 데드크로스 직전 경고. 급락 대비해 분할 매도·손절선 점검
 
  BBandsUP(N, 2) = (고+저+종)/3 의 N일 단순평균 + 2 × 표준편차  (영웅문과 소수점까지 일치 확인)
 
@@ -25,6 +28,9 @@
  ● 과거 신호 점검 : 점검.bat  (python tornado_screener.py 089590 051630)
      → 지난 CHECK_DAYS 영업일 동안 신호가 뜬 날짜를 모두 표시
      → '토네이도_과거신호_YYYYMMDD.xlsx'
+ ● 매수·매도 알림 검증 : 검증.bat  (python tornado_screener.py verify 100590 2026-01-01)
+     → 시작일부터 매일 그날 기준으로 검색기를 다시 돌려 매수·매도 추천일과 거래별 수익 표시
+     → '토네이도_검증_종목코드_YYYYMMDD.xlsx'
 """
 
 import os
@@ -47,6 +53,7 @@ SIGNAL_DAYS = 1     # 전 종목 검색: 1 = 오늘 신호만, 2 = 어제·오�
 WORKERS = 8         # 동시 다운로드 수 (오류 많으면 4로 낮추기)
 
 SELL_LOOKBACK = 60  # 매도 대상: 최근 며칠(영업일) 안에 매수 신호가 났던 종목까지 볼지 (20 = 1개월, 60 = 3개월)
+WARN_GAP = 0.01     # 매도 주의: 보유 종목의 5일선이 10일선 위 1% 이내로 좁혀지며 내려올 때 (0 = 안 씀)
 
 VOL_MIN = 0         # 거래량 조건: 0 = 안 씀, 1.5 = 20일 평균의 1.5배 이상만 (통계 결과 보고 정하기)
 
@@ -157,15 +164,49 @@ def compute(df):
     return df
 
 
+def _held_signals(df):
+    """오늘 전까지 '보유 중'인 매수 신호들 (직전 데드크로스 이후, 최근 SELL_LOOKBACK일 안)"""
+    n = len(df)
+    dead_prev = np.where(df["dead"].values[:n - 1])[0]
+    after = dead_prev[-1] + 1 if len(dead_prev) else 0      # 직전 데드크로스 이후 신호만 (그 전 것은 이미 매도)
+    sig = np.where(df["signal"].values[:n - 1])[0]
+    return sig[sig >= max(after, n - 1 - SELL_LOOKBACK)]
+
+
+def warn_row(df):
+    """매도 주의: 보유 중인데 5일선이 10일선 위에서 WARN_GAP 이내로 좁혀지며 내려오는 중"""
+    n = len(df)
+    if n < 3 or df["dead"].iloc[-1]:
+        return None
+    r, p = df.iloc[-1], df.iloc[-2]
+    gap, gap_prev = r["ma5"] - r["ma10"], p["ma5"] - p["ma10"]
+    if not (0 <= gap <= r["ma10"] * WARN_GAP and gap < gap_prev):
+        return None
+    sig = _held_signals(df)
+    if not len(sig):
+        return None
+    i = sig[0]
+    buy = df["Open"].iloc[i + 1]
+    return {
+        "매수 신호일": df.index[i].date(),
+        "신호 등급": df["grade"].iloc[i],
+        "매수가(신호 다음날 시가)": int(buy) if buy > 0 else None,
+        "오늘 종가": int(r["Close"]),
+        "등락률(%)": round(r["chg"], 2),
+        "수익률(%)": round((r["Close"] / buy - 1) * 100, 2) if buy > 0 else None,
+        "보유일(영업일)": int(n - 1 - i),
+        "5일선": int(r["ma5"]),
+        "10일선": int(r["ma10"]),
+        "5·10 간격(%)": round(gap / r["ma10"] * 100, 2),
+    }
+
+
 def sell_row(df):
     """오늘이 매도일(매수 신호 뒤 첫 5·10 데드크로스)이면 매도 정보 dict, 아니면 None"""
     n = len(df)
     if n < 3 or not df["dead"].iloc[-1]:
         return None
-    dead_prev = np.where(df["dead"].values[:n - 1])[0]
-    after = dead_prev[-1] + 1 if len(dead_prev) else 0      # 직전 데드크로스 이후 신호만 (그 전 것은 이미 매도)
-    sig = np.where(df["signal"].values[:n - 1])[0]
-    sig = sig[sig >= max(after, n - 1 - SELL_LOOKBACK)]
+    sig = _held_signals(df)
     if not len(sig):
         return None
     i = sig[0]                                               # 이번 보유의 첫 매수 신호
@@ -351,7 +392,7 @@ def scan_all():
         print(f"검색 대상 {len(u)}종목 · 처음이라 전체 데이터를 받아 저장합니다 (20~40분, 한 번만)…")
     else:
         print(f"검색 대상 {len(u)}종목 · 저장된 데이터에 오늘 시세만 붙입니다 (1~2분)…")
-    rows, sells, fails = [], [], 0
+    rows, sells, warns, fails = [], [], [], 0
     with ThreadPoolExecutor(WORKERS) as ex:
         futs = {ex.submit(fast_fetch, r, trade_day): r for r in u.itertuples()}
         for i, f in enumerate(as_completed(futs), 1):
@@ -373,6 +414,9 @@ def scan_all():
             s = sell_row(df)
             if s:
                 sells.append({"시장": r.시장, "종목코드": r.Code, "종목명": r.Name, **s})
+            w = warn_row(df) if WARN_GAP else None
+            if w:
+                warns.append({"시장": r.시장, "종목코드": r.Code, "종목명": r.Name, **w})
 
     out = pd.DataFrame(rows)
     if len(out):
@@ -385,11 +429,102 @@ def scan_all():
     print(out.to_string(index=False) if len(out) else "   없음")
     print(f"\n■ 매도 대상 (5·10일선 데드크로스, 최근 {SELL_LOOKBACK}영업일 안 매수신호 종목) : {len(sell)}종목")
     print(sell.to_string(index=False) if len(sell) else "   없음")
+    warn = pd.DataFrame(warns)
+    if len(warn):
+        warn = warn.sort_values("5·10 간격(%)")
+    print(f"\n■ 매도 주의 (보유 종목 5일선이 10일선 위 {WARN_GAP*100:.0f}% 이내로 접근) : {len(warn)}종목")
+    print(warn.to_string(index=False) if len(warn) else "   없음")
     fname = f"토네이도_매수매도_{dt.date.today():%Y%m%d}.xlsx"
     with pd.ExcelWriter(fname) as w:
         (out if len(out) else pd.DataFrame({"결과": ["매수 후보 없음"]})).to_excel(w, sheet_name="매수후보", index=False)
         (sell if len(sell) else pd.DataFrame({"결과": ["매도 대상 없음"]})).to_excel(w, sheet_name="매도대상", index=False)
-    print(f"\n→ {fname} 저장 (매수 {len(out)} · 매도 {len(sell)}종목, 데이터 실패 {fails}건)")
+        (warn if len(warn) else pd.DataFrame({"결과": ["매도 주의 없음"]})).to_excel(w, sheet_name="매도주의", index=False)
+    print(f"\n→ {fname} 저장 (매수 {len(out)} · 매도 {len(sell)} · 주의 {len(warn)}종목, 데이터 실패 {fails}건)")
+
+
+def verify(code, start):
+    """매수·매도 알림 검증: start 날짜부터 하루씩, 그날 장 마감 시점까지의 데이터만으로
+    검색기를 다시 돌려 '그날 실제로 떴을' 매수 추천·매도 추천을 모두 표시"""
+    try:
+        u = get_universe()
+        name = dict(zip(u["Code"], u["Name"])).get(code, "")
+    except Exception:
+        name = ""
+    print(f"{name}({code}) 데이터 받는 중…", flush=True)
+    raw = fetch(code, 6)
+    raw = raw[raw["Close"] > 0]
+    days = raw.index[raw.index >= pd.Timestamp(start)]
+    if not len(days):
+        print("검증 기간에 데이터가 없습니다.")
+        return
+    print(f"■ {name}({code}) 매수·매도 알림 검증 : {days[0].date()} ~ {days[-1].date()} ({len(days)}영업일)")
+    print("   (매일 그날까지의 주가만으로 검색기를 다시 계산 → 미래 데이터 사용 없음)\n")
+    log, trades, hold, warned = [], [], None, {}
+    for d in days:
+        df = compute(raw[raw.index <= d])
+        if df is None:
+            continue
+        r = df.iloc[-1]
+        if r["signal"]:
+            first = hold is None
+            log.append({"날짜": d.date(), "알림": "매수 추천" if first else "매수 추천(보유 중 재신호)",
+                        "등급": r["grade"], "종가": int(r["Close"]), "등락률(%)": round(r["chg"], 2),
+                        "5일선": int(r["ma5"]), "10일선": int(r["ma10"]), "메모": "다음날 시가 매수"})
+            if first:
+                hold = {"매수 추천일": d.date(), "등급": r["grade"]}
+        s = sell_row(df)
+        if s:
+            log.append({"날짜": d.date(), "알림": "매도 추천", "등급": s["신호 등급"],
+                        "종가": int(r["Close"]), "등락률(%)": round(r["chg"], 2),
+                        "5일선": int(r["ma5"]), "10일선": int(r["ma10"]),
+                        "메모": f"5·10 데드크로스 · {s['매수 신호일']} 신호분 · 수익 {s['수익률(%)']}%"})
+            wd, wc = warned.get(s["매수 신호일"], (None, None))
+            buy = s["매수가(신호 다음날 시가)"]
+            trades.append({"매수 추천일": s["매수 신호일"], "등급": s["신호 등급"],
+                           "매수가(다음날 시가)": buy,
+                           "매도 추천일": d.date(), "매도가(당일 종가)": int(r["Close"]),
+                           "수익률(%)": s["수익률(%)"], "보유일(영업일)": s["보유일(영업일)"],
+                           "첫 매도 주의일": wd,
+                           "주의일 종가 매도 시 수익(%)": round((wc / buy - 1) * 100, 2) if wc and buy else None})
+            hold = None
+        w = warn_row(df) if WARN_GAP else None
+        if w:
+            warned.setdefault(w["매수 신호일"], (d.date(), int(r["Close"])))
+            log.append({"날짜": d.date(), "알림": "매도 주의", "등급": w["신호 등급"],
+                        "종가": int(r["Close"]), "등락률(%)": round(r["chg"], 2),
+                        "5일선": int(r["ma5"]), "10일선": int(r["ma10"]),
+                        "메모": f"5·10 간격 {w['5·10 간격(%)']}% · 현재 수익 {w['수익률(%)']}%"})
+        if not s and hold is not None and df["dead"].iloc[-1]:
+            hold = None                                       # 3개월 넘게 보유 → 매도 추천 대상에서 빠짐
+    if hold is not None:                                      # 아직 매도 신호 안 나온 보유분
+        full = compute(raw)
+        i = full.index.get_loc(pd.Timestamp(hold["매수 추천일"]))
+        buy = full["Open"].iloc[i + 1] if i + 1 < len(full) else None
+        last = full["Close"].iloc[-1]
+        trades.append({"매수 추천일": hold["매수 추천일"], "등급": hold["등급"],
+                       "매수가(다음날 시가)": int(buy) if buy else None,
+                       "매도 추천일": "보유 중", "매도가(당일 종가)": int(last),
+                       "수익률(%)": round((last / buy - 1) * 100, 2) if buy else None,
+                       "보유일(영업일)": int(len(full) - 1 - i)})
+
+    if not log:
+        print("검증 기간에 매수·매도 알림이 한 번도 없었습니다.")
+    for x in log:
+        print(f"   {x['날짜']}  {x['알림']:<16} {str(x['등급'] or ''):<10} 종가 {x['종가']:>8,}"
+              f"  ({x['등락률(%)']:+.2f}%)  5일선 {x['5일선']:,} / 10일선 {x['10일선']:,}  {x['메모']}")
+    if trades:
+        print("\n■ 거래별 결과 (매수 추천 다음날 시가 매수 → 매도 추천일 종가 매도)")
+        for t in trades:
+            extra = (f"   ※ {t['첫 매도 주의일']} 매도 주의 때 팔았다면 {t['주의일 종가 매도 시 수익(%)']:+.2f}%"
+                     if t.get("첫 매도 주의일") else "")
+            print(f"   {t['매수 추천일']} 매수 {t['매수가(다음날 시가)']:,} → {t['매도 추천일']} 매도 "
+                  f"{t['매도가(당일 종가)']:,}  수익 {t['수익률(%)']:+.2f}%  ({t['보유일(영업일)']}일){extra}")
+    fname = f"토네이도_검증_{code}_{dt.date.today():%Y%m%d}.xlsx"
+    with pd.ExcelWriter(fname) as w:
+        pd.DataFrame(log or [{"결과": "알림 없음"}]).to_excel(w, sheet_name="알림 일지", index=False)
+        pd.DataFrame(trades or [{"결과": "거래 없음"}]).to_excel(w, sheet_name="거래별 결과", index=False)
+    print(f"\n→ {fname} 저장")
+    print("  ※ 영웅문 차트에서 위 날짜들을 직접 찍어 보며 조건이 맞는지 확인하세요.")
 
 
 STOP_LOSS = 0.05    # 매도 규칙 시험: 손절 -5%
@@ -634,6 +769,9 @@ def b_to_a_stats(windows=(1, 3, 5, 10)):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].lower() in ("stats", "통계"):
         b_to_a_stats()
+        sys.exit()
+    if len(sys.argv) > 2 and sys.argv[1].lower() in ("verify", "검증"):   # 예: python tornado_screener.py verify 100590 2026-01-01
+        verify(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "2026-01-01")
         sys.exit()
     if len(sys.argv) > 1:              # 예: python tornado_screener.py 089590 051630
         CHECK_CODES = sys.argv[1:]

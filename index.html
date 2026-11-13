@@ -42,6 +42,8 @@
   .gA { background: rgba(242,184,75,.15); color: var(--gold); }
   .gB { background: rgba(111,195,168,.15); color: var(--b); }
   .gS { background: rgba(76,141,255,.15); color: var(--down); }
+  .gW { background: rgba(255,159,67,.15); color: #ff9f43; }
+  .sec { color: var(--sub); font-size: 13px; font-weight: 600; margin: 14px 4px 8px; }
   .tab.sell.on { border-color: var(--down); color: var(--down); }
   .price { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
   .close { font-size: 20px; font-weight: 700; }
@@ -80,6 +82,7 @@
     · 조건: 종가 &gt; 5 &gt; 10 &gt; 20 &gt; 60일선(지수) 정배열 + 토네이도 1·2번선 겹친 띠를 양봉이 돌파<br>
     · 결과에 나온 종목 = 다음 거래일 매수 후보 (평일 15:50 이후 자동 갱신)<br>
     · 매도: 최근 약 3개월 안에 매수 신호가 났던 종목 중, 오늘 5일선이 10일선 아래로 내려간(데드크로스) 종목<br>
+    · 매도 주의: 보유 종목의 5일선이 10일선 위 1% 이내로 좁혀지며 내려오는 중 (데드크로스 직전 경고)<br>
     · 투자 판단은 차트를 직접 확인한 뒤 하세요.
   </div>
 </main>
@@ -117,11 +120,11 @@ async function load(day) {
 function render() {
   const all = data["종목"] || [];
   const A = all.filter((x) => x["등급"].startsWith("A")), B = all.filter((x) => x["등급"].startsWith("B"));
-  const S = data["매도"] || [];
+  const S = data["매도"] || [], W = data["매도주의"] || [];
   $("#nAll").textContent = all.length; $("#nA").textContent = A.length; $("#nB").textContent = B.length;
-  $("#nS").textContent = data["매도"] ? S.length : "";
+  $("#nS").textContent = data["매도"] ? (W.length ? `${S.length}+${W.length}` : S.length) : "";
   $("#meta").textContent = `기준일 ${data["기준일"]} · ${data["검색종목수"].toLocaleString()}종목 검색 · ${data["생성시각"]} 갱신`;
-  if (grade === "S") return renderSell(S, !!data["매도"]);
+  if (grade === "S") return renderSell(S, W, !!data["매도"]);
   const rows = grade === "A" ? A : grade === "B" ? B : all;
   if (!rows.length) {
     $("#list").innerHTML = `<div class="empty">조건에 맞는 종목이 없습니다.</div>`;
@@ -157,18 +160,26 @@ function render() {
   }).join("");
 }
 
-function renderSell(rows, has) {
-  if (!rows.length) {
-    $("#list").innerHTML = `<div class="empty">${has ? "오늘 매도할 종목이 없습니다." : "이 날짜 결과에는 매도 정보가 없습니다."}</div>`;
+function renderSell(rows, warns, has) {
+  if (!has) {
+    $("#list").innerHTML = `<div class="empty">이 날짜 결과에는 매도 정보가 없습니다.</div>`;
     return;
   }
-  $("#list").innerHTML = rows.map((x) => {
+  $("#list").innerHTML =
+    `<div class="sec">매도 (5·10 데드크로스) ${rows.length}</div>` +
+    (rows.length ? sellCards(rows, false) : `<div class="empty" style="padding:20px">오늘 매도할 종목이 없습니다.</div>`) +
+    `<div class="sec">매도 주의 (5일선이 10일선 위 1% 이내로 접근) ${warns.length}</div>` +
+    (warns.length ? sellCards(warns, true) : `<div class="empty" style="padding:20px">매도 주의 종목이 없습니다.</div>`);
+}
+
+function sellCards(rows, warn) {
+  return rows.map((x) => {
     const c = x["등락률(%)"], cls = c > 0 ? "var(--up)" : c < 0 ? "var(--down)" : "var(--sub)";
     const p = x["수익률(%)"], pcls = p > 0 ? "var(--up)" : p < 0 ? "var(--down)" : "var(--sub)";
     return `<div class="card">
       <div class="top">
         <div class="name">${x["종목명"]}<span class="code">${x["종목코드"]}</span></div>
-        <span class="grade gS">매도 · 5/10 데드</span>
+        <span class="grade ${warn ? "gW" : "gS"}">${warn ? "주의 · 간격 " + x["5·10 간격(%)"] + "%" : "매도 · 5/10 데드"}</span>
       </div>
       <div class="price">
         <span class="close">${won(x["오늘 종가"])}</span>
@@ -181,7 +192,7 @@ function renderSell(rows, has) {
         <div><b>매수가</b>${won(x["매수가(신호 다음날 시가)"])}</div>
         <div><b>수익률</b><span style="color:${pcls}">${p == null ? "-" : (p > 0 ? "+" : "") + p + "%"}</span></div>
         <div><b>보유일</b>${x["보유일(영업일)"]}일</div>
-        <div><b>신호 횟수</b>${x["신호 횟수"]}회</div>
+        <div><b>${warn ? "5·10 간격" : "신호 횟수"}</b>${warn ? x["5·10 간격(%)"] + "%" : x["신호 횟수"] + "회"}</div>
         <div><b>5일선</b>${won(x["5일선"])}</div>
         <div><b>10일선</b>${won(x["10일선"])}</div>
       </div>
