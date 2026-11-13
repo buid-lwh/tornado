@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14161c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="토네이도">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>토네이도 매수후보</title>
+<style>
+  :root {
+    --bg: #14161c; --card: #1d2029; --line: #2b2f3a; --text: #eef0f4; --sub: #9aa1b0;
+    --up: #ff5a5f; --down: #4c8dff; --gold: #f2b84b; --b: #6fc3a8;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg);
+    padding: calc(env(safe-area-inset-top) + 14px) 16px 10px; border-bottom: 1px solid var(--line); }
+  .row { display: flex; align-items: center; gap: 8px; }
+  h1 { font-size: 19px; margin: 0; flex: 1; letter-spacing: -0.3px; }
+  h1 span { color: var(--gold); }
+  select, button { font: inherit; color: var(--text); background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; }
+  button:active { opacity: .7; }
+  .meta { color: var(--sub); font-size: 12.5px; margin-top: 8px; }
+  .tabs { display: flex; gap: 6px; margin-top: 10px; }
+  .tab { flex: 1; text-align: center; padding: 8px 0; border-radius: 10px; background: var(--card);
+    border: 1px solid var(--line); font-size: 14px; }
+  .tab.on { border-color: var(--gold); color: var(--gold); font-weight: 600; }
+  main { padding: 12px 12px calc(env(safe-area-inset-bottom) + 24px); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 13px 14px; margin-bottom: 10px; }
+  .top { display: flex; align-items: baseline; gap: 8px; }
+  .name { font-size: 17px; font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .code { color: var(--sub); font-size: 12px; font-weight: 400; margin-left: 4px; }
+  .grade { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 999px; }
+  .gA { background: rgba(242,184,75,.15); color: var(--gold); }
+  .gB { background: rgba(111,195,168,.15); color: var(--b); }
+  .price { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+  .close { font-size: 20px; font-weight: 700; }
+  .chg { font-size: 14px; font-weight: 600; }
+  .mkt { margin-left: auto; color: var(--sub); font-size: 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px;
+    padding-top: 10px; border-top: 1px dashed var(--line); font-size: 13px; }
+  .grid div { display: flex; justify-content: space-between; }
+  .grid b { font-weight: 500; color: var(--sub); }
+  .links { display: flex; gap: 8px; margin-top: 10px; }
+  .links a { flex: 1; text-align: center; text-decoration: none; color: var(--text); font-size: 13px;
+    padding: 8px 0; border-radius: 9px; background: #262a35; }
+  .empty, .err { text-align: center; color: var(--sub); padding: 50px 20px; line-height: 1.6; }
+  .err { color: var(--up); }
+  .note { color: var(--sub); font-size: 11.5px; line-height: 1.6; padding: 6px 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>🌪 토네이도 <span>매수후보</span></h1>
+    <select id="date" aria-label="날짜 선택"></select>
+    <button id="reload" aria-label="새로고침">↻</button>
+  </div>
+  <div class="meta" id="meta">불러오는 중…</div>
+  <div class="tabs">
+    <div class="tab on" data-g="all">전체 <span id="nAll"></span></div>
+    <div class="tab" data-g="A">A 완전통과 <span id="nA"></span></div>
+    <div class="tab" data-g="B">B 중간이상 <span id="nB"></span></div>
+  </div>
+</header>
+<main>
+  <div id="list"></div>
+  <div class="note">
+    · 조건: 종가 &gt; 5 &gt; 10 &gt; 20 &gt; 60일선(지수) 정배열 + 토네이도 1·2번선 겹친 띠를 양봉이 돌파<br>
+    · 결과에 나온 종목 = 다음 거래일 매수 후보 (평일 15:50 이후 자동 갱신)<br>
+    · 투자 판단은 차트를 직접 확인한 뒤 하세요.
+  </div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+let data = null, grade = "all";
+const won = (v) => v == null ? "-" : Number(v).toLocaleString("ko-KR");
+
+async function getJSON(url) {
+  const r = await fetch(url + "?t=" + Date.now(), { cache: "no-store" });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+async function loadDates() {
+  try {
+    const { dates } = await getJSON("data/index.json");
+    $("#date").innerHTML = dates.map((d, i) =>
+      `<option value="${d}">${d.slice(4,6)}/${d.slice(6)}${i === 0 ? " (최신)" : ""}</option>`).join("");
+  } catch { $("#date").innerHTML = ""; }
+}
+
+async function load(day) {
+  $("#meta").textContent = "불러오는 중…";
+  try {
+    data = await getJSON(day ? `data/${day}.json` : "data/latest.json");
+    render();
+  } catch (e) {
+    $("#meta").textContent = "";
+    $("#list").innerHTML = `<div class="err">결과 파일이 아직 없습니다.<br>
+      GitHub 'Actions'에서 첫 검색이 끝나면 나타납니다.</div>`;
+  }
+}
+
+function render() {
+  const all = data["종목"] || [];
+  const A = all.filter((x) => x["등급"].startsWith("A")), B = all.filter((x) => x["등급"].startsWith("B"));
+  $("#nAll").textContent = all.length; $("#nA").textContent = A.length; $("#nB").textContent = B.length;
+  $("#meta").textContent = `기준일 ${data["기준일"]} · ${data["검색종목수"].toLocaleString()}종목 검색 · ${data["생성시각"]} 갱신`;
+  const rows = grade === "A" ? A : grade === "B" ? B : all;
+  if (!rows.length) {
+    $("#list").innerHTML = `<div class="empty">조건에 맞는 종목이 없습니다.</div>`;
+    return;
+  }
+  $("#list").innerHTML = rows.map((x) => {
+    const c = x["등락률(%)"], cls = c > 0 ? "var(--up)" : c < 0 ? "var(--down)" : "var(--sub)";
+    const isA = x["등급"].startsWith("A");
+    return `<div class="card">
+      <div class="top">
+        <div class="name">${x["종목명"]}<span class="code">${x["종목코드"]}</span></div>
+        <span class="grade ${isA ? "gA" : "gB"}">${x["등급"]}</span>
+      </div>
+      <div class="price">
+        <span class="close">${won(x["종가"])}</span>
+        <span class="chg" style="color:${cls}">${c > 0 ? "+" : ""}${c}%</span>
+        <span class="mkt">${x["시장"]} · 신호 ${x["신호일"].slice(5)}</span>
+      </div>
+      <div class="grid">
+        <div><b>시가</b>${won(x["시가"])}</div>
+        <div><b>거래량</b>${x["거래량/20일평균(배)"] ?? "-"}배</div>
+        <div><b>띠 상단</b>${won(x["띠 상단"])}</div>
+        <div><b>띠 하단</b>${won(x["띠 하단"])}</div>
+        <div><b>1번선</b>${x["1번선(BB)"]}</div>
+        <div><b>묶음 간격</b>${x["두 묶음 간격(%)"]}%</div>
+        <div style="grid-column:1/-1"><b>2번선</b>${x["2번선(Env)"]}</div>
+      </div>
+      <div class="links">
+        <a href="https://m.stock.naver.com/domestic/stock/${x["종목코드"]}/total" target="_blank" rel="noopener">네이버 차트</a>
+        <a href="https://finance.daum.net/quotes/A${x["종목코드"]}" target="_blank" rel="noopener">다음 증권</a>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach((x) => x.classList.remove("on"));
+  t.classList.add("on"); grade = t.dataset.g; if (data) render();
+});
+$("#date").onchange = (e) => load(e.target.selectedIndex === 0 ? null : e.target.value);
+$("#reload").onclick = async () => { await loadDates(); load(null); };
+
+loadDates().then(() => load(null));
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+</script>
+</body>
+</html>
