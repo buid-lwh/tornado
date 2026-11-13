@@ -1,4 +1,4 @@
-name: 토네이도 매수후보 검색
+name: 토네이도
 
 on:
   schedule:
