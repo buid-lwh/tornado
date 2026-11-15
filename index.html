@@ -28,8 +28,8 @@
     border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; }
   button:active { opacity: .7; }
   .meta { color: var(--sub); font-size: 12.5px; margin-top: 8px; }
-  .tabs { display: flex; gap: 6px; margin-top: 10px; }
-  .tab { flex: 1; text-align: center; padding: 8px 0; border-radius: 10px; background: var(--card);
+  .tabs { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .tab { flex: 1 1 22%; white-space: nowrap; text-align: center; padding: 8px 0; border-radius: 10px; background: var(--card);
     border: 1px solid var(--line); font-size: 14px; }
   .tab.on { border-color: var(--gold); color: var(--gold); font-weight: 600; }
   main { padding: 12px 12px calc(env(safe-area-inset-bottom) + 24px); }
@@ -45,6 +45,10 @@
   .gW { background: rgba(255,159,67,.15); color: #ff9f43; }
   .sec { color: var(--sub); font-size: 13px; font-weight: 600; margin: 14px 4px 8px; }
   .tab.sell.on { border-color: var(--down); color: var(--down); }
+  .tab.r20.on, .gR { border-color: #c77dff; color: #c77dff; }
+  .gR { background: rgba(199,125,255,.15); }
+  .tab.rev.on, .gV { border-color: #4cd3e0; color: #4cd3e0; }
+  .gV { background: rgba(76,211,224,.15); }
   .price { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
   .close { font-size: 20px; font-weight: 700; }
   .chg { font-size: 14px; font-weight: 600; }
@@ -74,6 +78,8 @@
     <div class="tab" data-g="A">A 완전통과 <span id="nA"></span></div>
     <div class="tab" data-g="B">B 중간이상 <span id="nB"></span></div>
     <div class="tab sell" data-g="S">매도 <span id="nS"></span></div>
+    <div class="tab r20" data-g="R">20일선 재돌파 <span id="nR"></span></div>
+    <div class="tab rev" data-g="V">역배열 돌파 <span id="nV"></span></div>
   </div>
 </header>
 <main>
@@ -83,6 +89,8 @@
     · 결과에 나온 종목 = 다음 거래일 매수 후보 (평일 15:50 이후 자동 갱신)<br>
     · 매도: 최근 약 3개월 안에 매수 신호가 났던 종목 중, 오늘 5일선이 10일선 아래로 내려간(데드크로스) 종목<br>
     · 매도 주의: 보유 종목의 5일선이 10일선 위 1% 이내로 좁혀지며 내려오는 중 (데드크로스 직전 경고)<br>
+    · 20일선 재돌파: 정배열 → 급락(5·20 데드크로스) → 20·60일선 사이 저점 → 20일선 재돌파 → 1·2번선 20개 중 절반 이상 처음 통과<br>
+    · 역배열 돌파: 20일선 &lt; 60일선 역배열에서 양봉 하나가 20·60일선을 한 번에 돌파 (A 몸통관통 · B 갭돌파)<br>
     · 투자 판단은 차트를 직접 확인한 뒤 하세요.
   </div>
 </main>
@@ -124,7 +132,11 @@ function render() {
   $("#nAll").textContent = all.length; $("#nA").textContent = A.length; $("#nB").textContent = B.length;
   $("#nS").textContent = data["매도"] ? (W.length ? `${S.length}+${W.length}` : S.length) : "";
   $("#meta").textContent = `기준일 ${data["기준일"]} · ${data["검색종목수"].toLocaleString()}종목 검색 · ${data["생성시각"]} 갱신`;
+  const R = data["20일선재돌파"], V = data["역배열돌파"];
+  $("#nR").textContent = R ? R.length : ""; $("#nV").textContent = V ? V.length : "";
   if (grade === "S") return renderSell(S, W, !!data["매도"]);
+  if (grade === "R") return renderOther(R, "R");
+  if (grade === "V") return renderOther(V, "V");
   const rows = grade === "A" ? A : grade === "B" ? B : all;
   if (!rows.length) {
     $("#list").innerHTML = `<div class="empty">조건에 맞는 종목이 없습니다.</div>`;
@@ -200,6 +212,57 @@ function sellCards(rows, warn) {
         <a href="https://m.stock.naver.com/domestic/stock/${x["종목코드"]}/total" target="_blank" rel="noopener">네이버 차트</a>
         <a href="https://finance.daum.net/quotes/A${x["종목코드"]}" target="_blank" rel="noopener">다음 증권</a>
       </div>
+    </div>`;
+  }).join("");
+}
+
+const links = (code) => `<div class="links">
+        <a href="https://m.stock.naver.com/domestic/stock/${code}/total" target="_blank" rel="noopener">네이버 차트</a>
+        <a href="https://finance.daum.net/quotes/A${code}" target="_blank" rel="noopener">다음 증권</a>
+      </div>`;
+
+function renderOther(rows, kind) {
+  if (!rows) {
+    $("#list").innerHTML = `<div class="empty">이 날짜 결과에는 이 검색기 정보가 없습니다.<br>(통합 검색 이후 날짜부터 나옵니다)</div>`;
+    return;
+  }
+  if (!rows.length) {
+    $("#list").innerHTML = `<div class="empty">조건에 맞는 종목이 없습니다.</div>`;
+    return;
+  }
+  $("#list").innerHTML = rows.map((x) => {
+    const c = x["등락률(%)"], cls = c > 0 ? "var(--up)" : c < 0 ? "var(--down)" : "var(--sub)";
+    const badge = kind === "R" ? `통과 ${x["통과 선(20개 중)"]}/20` : x["등급"];
+    const grid = kind === "R" ? `
+        <div><b>시가</b>${won(x["시가"])}</div>
+        <div><b>거래량</b>${x["거래량/20일평균(배)"] ?? "-"}배</div>
+        <div><b>데드크로스</b>${(x["5·20 데드크로스일"] || "").slice(5)}</div>
+        <div><b>저점일</b>${(x["저점일"] || "").slice(5)}</div>
+        <div><b>급락폭</b>${x["급락폭(%)"]}%</div>
+        <div><b>저점-60선</b>${x["저점-60일선(%)"]}%</div>
+        <div><b>20일선 돌파</b>${(x["20일선 돌파일"] || "").slice(5)}</div>
+        <div><b>5·60 데드</b>${x["5·60 데드크로스"]}</div>
+        <div><b>띠 맨 위까지</b>${x["띠 맨 위까지(%)"]}%</div>
+        <div><b>저점</b>${won(x["저점"])}</div>` : `
+        <div><b>시가</b>${won(x["시가"])}</div>
+        <div><b>거래량</b>${x["거래량배수"] ?? "-"}배</div>
+        <div><b>20일선</b>${won(x["20일선"])}</div>
+        <div><b>60일선</b>${won(x["60일선"])}</div>
+        <div><b>어제 20·60</b>${x["어제 20·60 간격(%)"]}%</div>
+        <div><b>종가-60선</b>${x["종가-60선(%)"]}%</div>
+        <div><b>120일선 위</b>${x["120일선 위"]}</div>`;
+    return `<div class="card">
+      <div class="top">
+        <div class="name">${x["종목명"]}<span class="code">${x["종목코드"]}</span></div>
+        <span class="grade ${kind === "R" ? "gR" : "gV"}">${badge}</span>
+      </div>
+      <div class="price">
+        <span class="close">${won(x["종가"])}</span>
+        <span class="chg" style="color:${cls}">${c > 0 ? "+" : ""}${c}%</span>
+        <span class="mkt">${x["시장"]} · 신호 ${String(x["신호일"]).slice(5)}</span>
+      </div>
+      <div class="grid">${grid}</div>
+      ${links(x["종목코드"])}
     </div>`;
   }).join("");
 }
