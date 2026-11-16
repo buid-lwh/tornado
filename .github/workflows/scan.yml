@@ -2,8 +2,15 @@ name: 토네이도
 
 on:
   schedule:
-    - cron: "50 6 * * 1-5"   # 평일 15:50 (한국시간) = 06:50 UTC
-  workflow_dispatch:          # Actions 화면에서 'Run workflow'로 바로 실행
+    # GitHub 예약 실행은 서버가 바쁘면 1~3시간 늦게 시작되는 일이 많아서
+    # 장 마감 뒤 여러 번 시도하고, 오늘 결과가 이미 있으면 바로 끝냄 (한국시간 = UTC + 9)
+    - cron: "43 6 * * 1-5"    # 15:43
+    - cron: "13 7 * * 1-5"    # 16:13
+    - cron: "43 7 * * 1-5"    # 16:43
+    - cron: "13 8 * * 1-5"    # 17:13
+    - cron: "43 8 * * 1-5"    # 17:43
+    - cron: "13 10 * * 1-5"   # 19:13 (마지막 안전망)
+  workflow_dispatch:          # Actions 화면에서 'Run workflow'로 바로 실행 (항상 새로 검색)
 
 permissions:
   contents: write
@@ -21,14 +28,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 오늘 결과가 이미 있는지 확인
+        id: check
+        run: |
+          git pull -q origin main || true
+          today=$(date +%Y%m%d)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ -f "data/${today}.json" ]; then
+            echo "오늘(${today}) 결과가 이미 있어서 건너뜁니다."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.check.outputs.skip != 'true'
         with:
           python-version: "3.11"
 
       - name: 패키지 설치
+        if: steps.check.outputs.skip != 'true'
         run: pip install -q finance-datareader pandas openpyxl requests
 
       - name: 저장된 주가 데이터 불러오기
+        if: steps.check.outputs.skip != 'true'
         uses: actions/cache/restore@v4
         with:
           path: data_cache
@@ -36,19 +58,22 @@ jobs:
           restore-keys: price-cache-
 
       - name: 전 종목 검색
+        if: steps.check.outputs.skip != 'true'
         run: python cloud_scan.py
 
       - name: 주가 데이터 저장
-        if: always()
+        if: always() && steps.check.outputs.skip != 'true'
         uses: actions/cache/save@v4
         with:
           path: data_cache
           key: price-cache-${{ github.run_id }}
 
       - name: 결과 올리기
+        if: steps.check.outputs.skip != 'true'
         run: |
           git config user.name "tornado-bot"
           git config user.email "tornado-bot@users.noreply.github.com"
           git add data
           git diff --cached --quiet || git commit -m "검색 결과 $(date +%Y-%m-%d)"
+          git pull -q --rebase origin main || true
           git push
