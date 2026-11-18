@@ -156,9 +156,34 @@ def after_market_tag(code, lists, nxt):
     return {"가능": True, "사유": "", "NXT": is_nxt}
 
 
+def _probe():
+    """임시 점검: 네이버 목록 응답 형식과 페이지 넘김 방식 확인"""
+    import requests
+    base = "https://stock.naver.com/api/domestic/market/stock/default"
+    for q in ["tradeType=KRX&marketType=ALL&orderType=statusTag",
+              "tradeType=KRX&marketType=ALL&orderType=marketAlertType&alertType=02",
+              "tradeType=NXT&marketType=ALL&orderType=marketSum",
+              "tradeType=KRX&marketType=ALL&orderType=marketSum"]:
+        for st in (0, 1, 2, 100):
+            try:
+                js = requests.get(f"{base}?{q}&startIdx={st}&pageSize=100", headers=NAVER_HDR, timeout=20).json()
+                items = js if isinstance(js, list) else []
+                mg = {}
+                for it in items:
+                    key = (it.get("manageStatusGb"), it.get("tradeStopYn"), it.get("tradableStatusCode"))
+                    mg[str(key)] = mg.get(str(key), 0) + 1
+                print(f"  [점검] {q} startIdx={st}: {len(items)}개 첫={items[0].get('itemcode') if items else None}"
+                      f" 끝={items[-1].get('itemcode') if items else None} 상태분포={mg}", flush=True)
+                if st == 0 and items:
+                    print(f"  [점검] 항목 예시: {json.dumps(items[0], ensure_ascii=False)}", flush=True)
+            except Exception as e:
+                print(f"  [점검] {q} startIdx={st} 실패: {e}", flush=True)
+
+
 def refresh_after_market_only():
     """장 마감 전: 검색은 하지 않고, 저장된 최신 결과의 애프터마켓 표시만 다시 확인"""
     path = os.path.join(OUT_DIR, "latest.json")
+    _probe()
     if not os.path.exists(path):
         return
     with open(path, encoding="utf-8") as fp:
