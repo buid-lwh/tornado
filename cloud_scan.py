@@ -78,12 +78,12 @@ NAVER_HDR = {"User-Agent": "Mozilla/5.0", "Referer": "https://stock.naver.com/"}
 ALERT = {"02": "투자경고", "03": "투자위험"}
 
 
-def _naver_all(trade):
-    """네이버 증권 전 종목 목록(시가총액순) → {종목코드: 항목}. startIdx는 페이지 번호(0,1,2…)"""
+def _naver_all(trade, order="marketSum"):
+    """네이버 증권 종목 목록 → {종목코드: 항목}. startIdx는 페이지 번호(0,1,2…)"""
     import requests
     out = {}
     for page in range(60):
-        r = requests.get(f"{NAVER_LIST}?tradeType={trade}&marketType=ALL&orderType=marketSum"
+        r = requests.get(f"{NAVER_LIST}?tradeType={trade}&marketType=ALL&orderType={order}"
                          f"&startIdx={page}&pageSize=100", headers=NAVER_HDR, timeout=20)
         r.raise_for_status()
         items = r.json()
@@ -115,6 +115,16 @@ def after_market_info():
     except Exception as e:
         print(f"  [애프터마켓] NXT 목록 실패: {e}")
     if krx:
+        try:                                     # 관리종목 목록 (거래정지 중인 관리종목은 상태값이 달라 목록으로도 확인)
+            admin = _naver_all("KRX", "statusTag")
+            if 0 < len(admin) < 800:
+                for c in admin:
+                    if c in krx:
+                        krx[c]["_관리"] = True
+            else:
+                print(f"  [애프터마켓] 관리종목 목록 {len(admin)}개 → 사용 안 함")
+        except Exception as e:
+            print(f"  [애프터마켓] 관리종목 목록 실패: {e}")
         cnt = {"관리종목": 0, "거래정지": 0, "투자경고": 0, "투자위험": 0}
         for it in krx.values():
             for k in _block_reasons(it):
@@ -126,7 +136,7 @@ def after_market_info():
 
 def _block_reasons(it):
     reasons = []
-    if it.get("manageStatusGb") == "1":
+    if it.get("manageStatusGb") == "1" or it.get("_관리"):
         reasons.append("관리종목")
     if it.get("tradeStopYn") == "Y" or it.get("tradableStatus") not in (None, "tradable"):
         reasons.append("거래정지")
