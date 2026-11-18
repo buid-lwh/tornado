@@ -69,13 +69,102 @@ def clean(v):
     return v
 
 
+# ───────────── 애프터마켓(시간외) 거래 가능 여부 ─────────────
+# 2026-09-14부터 KRX 시간외 단일가(16~18시)는 폐지되고 KRX 애프터마켓(16~20시, 실시간 체결)으로 바뀜.
+# 관리종목·투자경고·투자위험·거래정지 종목은 KRX 애프터마켓에서 제외.
+# NXT(넥스트레이드) 거래 종목은 NXT 애프터마켓(15:30~20시)에서도 거래 가능.
+NAVER_HOSTS = ["https://stock.naver.com", "https://m.stock.naver.com"]
+NAVER_HDR = {"User-Agent": "Mozilla/5.0", "Referer": "https://stock.naver.com/"}
+
+
+def _codes_in(js):
+    """응답 JSON 안의 종목코드(6자리)를 모두 찾기 (응답 구조가 바뀌어도 동작하도록)"""
+    out = set()
+    if isinstance(js, dict):
+        for k in ("itemCode", "stockCode", "code", "reutersCode"):
+            v = js.get(k)
+            if isinstance(v, str) and len(v) == 6 and v.isdigit():
+                out.add(v)
+        for v in js.values():
+            if isinstance(v, (dict, list)):
+                out |= _codes_in(v)
+    elif isinstance(js, list):
+        for v in js:
+            out |= _codes_in(v)
+    return out
+
+
+def _naver_list(order, trade="KRX", extra="", max_pages=15):
+    """네이버 증권 종목 목록(관리종목·거래정지·투자경고 등) 전체 코드 → set. 실패하면 None"""
+    import requests
+    for host in NAVER_HOSTS:
+        codes, ok = set(), False
+        try:
+            for page in range(max_pages):
+                url = (f"{host}/api/domestic/market/stock/default?tradeType={trade}&marketType=ALL"
+                       f"&orderType={order}{extra}&startIdx={page * 100}&pageSize=100")
+                r = requests.get(url, headers=NAVER_HDR, timeout=20)
+                r.raise_for_status()
+                got = _codes_in(r.json())
+                ok = True
+                if not got - codes:
+                    break
+                codes |= got
+                if len(got) < 100:
+                    break
+            if ok:
+                return codes
+        except Exception as e:
+            print(f"  [애프터마켓] {host} {order}{extra} 실패: {e}", flush=True)
+    return None
+
+
+def after_market_info():
+    """{'관리종목': set, ...} 와 NXT 종목 set. 목록을 못 받은 항목은 None"""
+    lists = {
+        "관리종목": _naver_list("statusTag"),
+        "거래정지": _naver_list("tradeStopYn"),
+        "투자경고": _naver_list("marketAlertType", extra="&alertType=02"),
+        "투자위험": _naver_list("marketAlertType", extra="&alertType=03"),
+    }
+    for k, v in lists.items():                  # 전 종목이 섞여 오면(목록 필터가 안 먹으면) 믿지 않음
+        if v is not None and len(v) > 800:
+            print(f"  [애프터마켓] {k} 목록이 {len(v)}개로 너무 많아 무시합니다.")
+            lists[k] = None
+    nxt = _naver_list("marketSum", trade="NXT")
+    if nxt is not None and len(nxt) < 100:      # NXT 종목은 600개 안팎 → 너무 적으면 잘못 받은 것
+        nxt = None
+    print("  [애프터마켓] " + " · ".join(f"{k} {'실패' if v is None else len(v)}" for k, v in
+                                     {**lists, "NXT": nxt}.items()), flush=True)
+    return lists, nxt
+
+
+def after_market_tag(code, lists, nxt):
+    reasons = [k for k, v in lists.items() if v is not None and code in v]
+    is_nxt = None if nxt is None else code in nxt
+    if reasons:
+        return {"가능": False, "사유": "·".join(reasons), "NXT": is_nxt}
+    if any(v is None for v in lists.values()):
+        return {"가능": None, "사유": "확인 못함", "NXT": is_nxt}
+    return {"가능": True, "사유": "", "NXT": is_nxt}
+
+
 def main():
     import 토네이도 as tt                     # 세 검색기(토네이도·20일선 재돌파·역배열 돌파)를 한 번에
     u = get_universe()
     res, trade_day, total, fails = tt.run_all(u, log=lambda m: print(m, flush=True))
 
+    try:
+        am_lists, am_nxt = after_market_info()
+    except Exception as e:
+        print(f"  [애프터마켓] 확인 실패: {e}")
+        am_lists, am_nxt = {"확인": None}, None
+
     def recs(name):
-        return [{k: clean(v) for k, v in row.items()} for row in res[name].to_dict("records")]
+        rows = [{k: clean(v) for k, v in row.items()} for row in res[name].to_dict("records")]
+        for row in rows:
+            row["애프터"] = after_market_tag(str(row["종목코드"]), am_lists, am_nxt)
+        return rows
 
     now = dt.datetime.now()
     result = {

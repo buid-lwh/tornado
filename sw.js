@@ -1,5 +1,5 @@
 // 화면 파일은 저장해 두고(오프라인에서도 열림), 검색 결과는 항상 최신을 먼저 받음
-const CACHE = "tornado-v2";
+const CACHE = "tornado-v3";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {

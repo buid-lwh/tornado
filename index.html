@@ -45,6 +45,10 @@
   .gW { background: rgba(255,159,67,.15); color: #ff9f43; }
   .sec { color: var(--sub); font-size: 13px; font-weight: 600; margin: 14px 4px 8px; }
   .tab.sell.on { border-color: var(--down); color: var(--down); }
+  .am { margin-top: 10px; font-size: 12.5px; padding: 6px 10px; border-radius: 8px; line-height: 1.5; }
+  .am.ok { background: rgba(80,200,120,.12); color: #5fd38a; }
+  .am.no { background: rgba(255,90,90,.12); color: #ff7a7a; }
+  .am.na { background: rgba(160,160,160,.12); color: var(--sub); }
   .tab.r20.on, .gR { border-color: #c77dff; color: #c77dff; }
   .gR { background: rgba(199,125,255,.15); }
   .tab.rev.on, .gV { border-color: #4cd3e0; color: #4cd3e0; }
@@ -91,6 +95,7 @@
     · 매도 주의: 보유 종목의 5일선이 10일선 위 1% 이내로 좁혀지며 내려오는 중 (데드크로스 직전 경고)<br>
     · 20일선 재돌파: 정배열 → 급락(5·20 데드크로스) → 20·60일선 사이 저점 → 20일선 재돌파 → 1·2번선 20개 중 절반 이상 처음 통과<br>
     · 역배열 돌파: 20일선 &lt; 60일선 역배열에서 양봉 하나가 20·60일선을 한 번에 돌파 (A 몸통관통 · B 갭돌파)<br>
+    · 🌙 애프터마켓: 장 마감 뒤 KRX 16:00~20:00 실시간 거래 (관리종목·투자경고·투자위험·거래정지 제외). NXT 종목은 15:30~20:00도 가능<br>
     · 투자 판단은 차트를 직접 확인한 뒤 하세요.
   </div>
 </main>
@@ -164,6 +169,7 @@ function render() {
         <div><b>묶음 간격</b>${x["두 묶음 간격(%)"]}%</div>
         <div style="grid-column:1/-1"><b>2번선</b>${x["2번선(Env)"]}</div>
       </div>
+      ${am(x)}
       <div class="links">
         <a href="https://m.stock.naver.com/domestic/stock/${x["종목코드"]}/total" target="_blank" rel="noopener">네이버 차트</a>
         <a href="https://finance.daum.net/quotes/A${x["종목코드"]}" target="_blank" rel="noopener">다음 증권</a>
@@ -208,12 +214,22 @@ function sellCards(rows, warn) {
         <div><b>5일선</b>${won(x["5일선"])}</div>
         <div><b>10일선</b>${won(x["10일선"])}</div>
       </div>
+      ${am(x)}
       <div class="links">
         <a href="https://m.stock.naver.com/domestic/stock/${x["종목코드"]}/total" target="_blank" rel="noopener">네이버 차트</a>
         <a href="https://finance.daum.net/quotes/A${x["종목코드"]}" target="_blank" rel="noopener">다음 증권</a>
       </div>
     </div>`;
   }).join("");
+}
+
+function am(x) {
+  const a = x["애프터"];
+  if (!a) return "";
+  const nxt = a["NXT"] ? " · NXT 15:30~20:00" : "";
+  if (a["가능"] === true) return `<div class="am ok">🌙 애프터마켓 거래 가능 · KRX 16:00~20:00${nxt}</div>`;
+  if (a["가능"] === false) return `<div class="am no">⛔ 애프터마켓 거래 불가 (${a["사유"]})</div>`;
+  return `<div class="am na">애프터마켓 가능 여부 확인 못함${nxt}</div>`;
 }
 
 const links = (code) => `<div class="links">
@@ -262,6 +278,7 @@ function renderOther(rows, kind) {
         <span class="mkt">${x["시장"]} · 신호 ${String(x["신호일"]).slice(5)}</span>
       </div>
       <div class="grid">${grid}</div>
+      ${am(x)}
       ${links(x["종목코드"])}
     </div>`;
   }).join("");
