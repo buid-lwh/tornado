@@ -81,9 +81,8 @@ def _codes_in(js):
     """응답 JSON 안의 종목코드(6자리)를 모두 찾기 (응답 구조가 바뀌어도 동작하도록)"""
     out = set()
     if isinstance(js, dict):
-        for k in ("itemCode", "stockCode", "code", "reutersCode"):
-            v = js.get(k)
-            if isinstance(v, str) and len(v) == 6 and v.isdigit():
+        for k, v in js.items():
+            if "code" in str(k).lower() and isinstance(v, str) and len(v) == 6 and v.isdigit():
                 out.add(v)
         for v in js.values():
             if isinstance(v, (dict, list)):
@@ -105,7 +104,11 @@ def _naver_list(order, trade="KRX", extra="", max_pages=15):
                        f"&orderType={order}{extra}&startIdx={page * 100}&pageSize=100")
                 r = requests.get(url, headers=NAVER_HDR, timeout=20)
                 r.raise_for_status()
-                got = _codes_in(r.json())
+                js = r.json()
+                if page == 0:
+                    print(f"  [애프터마켓] {order}{extra} {trade} 응답: {json.dumps(js, ensure_ascii=False)[:300]}",
+                          flush=True)
+                got = _codes_in(js)
                 ok = True
                 if not got - codes:
                     break
@@ -131,6 +134,10 @@ def after_market_info():
         if v is not None and len(v) > 800:
             print(f"  [애프터마켓] {k} 목록이 {len(v)}개로 너무 많아 무시합니다.")
             lists[k] = None
+    for k in ("관리종목", "거래정지"):             # 이 둘은 항상 수십 종목 이상 → 0개면 응답을 잘못 읽은 것
+        if lists[k] is not None and not lists[k]:
+            print(f"  [애프터마켓] {k} 0개 → 응답 형식을 못 읽은 것으로 보고 '확인 못함' 처리")
+            lists[k] = None
     nxt = _naver_list("marketSum", trade="NXT")
     if nxt is not None and len(nxt) < 100:      # NXT 종목은 600개 안팎 → 너무 적으면 잘못 받은 것
         nxt = None
@@ -149,7 +156,31 @@ def after_market_tag(code, lists, nxt):
     return {"가능": True, "사유": "", "NXT": is_nxt}
 
 
+def refresh_after_market_only():
+    """장 마감 전: 검색은 하지 않고, 저장된 최신 결과의 애프터마켓 표시만 다시 확인"""
+    path = os.path.join(OUT_DIR, "latest.json")
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as fp:
+        result = json.load(fp)
+    lists, nxt = after_market_info()
+    for k in ("종목", "매도", "매도주의", "20일선재돌파", "역배열돌파"):
+        for row in result.get(k) or []:
+            row["애프터"] = after_market_tag(str(row["종목코드"]), lists, nxt)
+    day = result["기준일"].replace("-", "")
+    for name in ["latest.json", f"{day}.json"]:
+        with open(os.path.join(OUT_DIR, name), "w", encoding="utf-8") as fp:
+            json.dump(result, fp, ensure_ascii=False, indent=1)
+    print(f"{result['기준일']} 결과의 애프터마켓 표시만 갱신했습니다.")
+
+
 def main():
+    now = dt.datetime.now()
+    if now.weekday() < 5 and (now.hour, now.minute) < (15, 35):
+        # 장중에는 거래소 시세가 '오늘 장중 가격'이라 전날 봉을 덮어쓰는 문제가 있어 검색하지 않음
+        print("장 마감(15:30) 전이라 전 종목 검색은 건너뜁니다.")
+        refresh_after_market_only()
+        return
     import 토네이도 as tt                     # 세 검색기(토네이도·20일선 재돌파·역배열 돌파)를 한 번에
     u = get_universe()
     res, trade_day, total, fails = tt.run_all(u, log=lambda m: print(m, flush=True))
