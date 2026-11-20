@@ -166,7 +166,7 @@ def refresh_after_market_only():
     with open(path, encoding="utf-8") as fp:
         result = json.load(fp)
     krx, nxt = after_market_info()
-    for k in ("종목", "매도", "매도주의", "20일선재돌파", "역배열돌파"):
+    for k in ("종목", "매도", "매도주의", "순위", "20일선재돌파", "역배열돌파"):
         for row in result.get(k) or []:
             row["애프터"] = after_market_tag(str(row["종목코드"]), krx, nxt)
     day = result["기준일"].replace("-", "")
@@ -210,6 +210,7 @@ def main():
         "종목": recs("토네이도 매수"),
         "매도": recs("토네이도 매도"),
         "매도주의": recs("토네이도 매도주의"),
+        "순위": recs("토네이도 순위"),
         "20일선재돌파": recs("20일선 재돌파"),
         "역배열돌파": recs("역배열 돌파"),
     }
@@ -230,6 +231,7 @@ def main():
     with open(os.path.join(OUT_DIR, "index.json"), "w", encoding="utf-8") as fp:
         json.dump({"dates": days}, fp)
     print(f"\n토네이도 매수 {len(result['종목'])} · 매도 {len(result['매도'])} · 주의 {len(result['매도주의'])}"
+          f" · 순위 {len(result['순위'])}"
           f" · 20일선 재돌파 {len(result['20일선재돌파'])} · 역배열 돌파 {len(result['역배열돌파'])}"
           f" → data/{day}.json 저장 (데이터 실패 {fails}건)")
 

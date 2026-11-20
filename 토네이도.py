@@ -3,6 +3,7 @@
 토네이도 통합 검색기 — 세 가지 검색기를 한 번에 실행 (코스피·코스닥 전 종목)
 
  ① 토네이도 12번선 돌파   (tornado_screener.py) : 매수 후보 · 매도 대상 · 매도 주의
+ ①-2 토네이도 순위        (tornado_rank.py)      : 1·2번선 돌파 후 3번선·4번선 단계 (제1·2·3순위, 기준은 그 파일 머리말)
  ② 20일선 재돌파          (scan.py)             : 정배열 눌림 → 20일선 재돌파 → 1·2번선 반 이상 통과
  ③ 20·60 역배열 동시돌파  (reverse_breakout.py) : 양봉 하나로 20·60일선을 한 번에 돌파
 
@@ -41,14 +42,15 @@ def _find(fname):
     sys.exit(f"{fname} 을(를) 찾지 못했습니다. 이 폴더나 옆 검색기 폴더에 있어야 합니다.")
 
 
-for _f in ("tornado_screener.py", "scan.py", "reverse_breakout.py"):
+for _f in ("tornado_screener.py", "scan.py", "reverse_breakout.py", "tornado_rank.py"):
     _find(_f)
 
 import tornado_screener as ts   # noqa: E402  ① 토네이도 (데이터 받기·저장도 이 파일 것을 씀)
 import scan as sc               # noqa: E402  ② 20일선 재돌파
 import reverse_breakout as rb   # noqa: E402  ③ 역배열 돌파
+import tornado_rank as tk       # noqa: E402  ①-2 토네이도 순위 (1·2번선 돌파 후 3·4번선 단계)
 
-SHEETS = ["토네이도 매수", "토네이도 매도", "토네이도 매도주의", "20일선 재돌파", "역배열 돌파"]
+SHEETS = ["토네이도 매수", "토네이도 매도", "토네이도 매도주의", "토네이도 순위", "20일선 재돌파", "역배열 돌파"]
 
 
 def check_one(r, raw, trade_day):
@@ -71,6 +73,15 @@ def check_one(r, raw, trade_day):
             w = ts.warn_row(df) if ts.WARN_GAP else None
             if w:
                 out["토네이도 매도주의"] = {**head, **w}
+            # ①-2 순위 : 1·2번선 돌파 후 3번선·4번선 단계 (제1·2·3순위)
+            ra = tk.prepare_rank(df)
+            if ra is not None:
+                n = len(ra["c"])
+                for k in range(1, ts.SIGNAL_DAYS + 1):
+                    rrow = tk.rank_row(df, ra, n - k)
+                    if rrow:
+                        out["토네이도 순위"] = {**head, "신호일": df.index[n - k].date(), **rrow}
+                        break
     except Exception:
         pass
     # ② 20일선 재돌파
@@ -129,6 +140,7 @@ def run_all(universe=None, log=print):
     sort = {"토네이도 매수": (["등급", "두 묶음 간격(%)", "등락률(%)"], [True, True, False]),
             "토네이도 매도": (["매수 신호일"], [True]),
             "토네이도 매도주의": (["5·10 간격(%)"], [True]),
+            "토네이도 순위": (["순위", "등락률(%)"], [True, False]),
             "20일선 재돌파": (["신호일", "통과 선(20개 중)"], [False, False]),
             "역배열 돌파": (["등급", "등락률(%)"], [True, False])}
     for k, (cols, asc) in sort.items():
@@ -147,7 +159,7 @@ def main():
         df = res[k]
         print(f"\n■ {k} : {len(df)}종목")
         if len(df):
-            cols = [c for c in ["시장", "종목명", "종목코드", "등급", "신호일", "종가", "오늘 종가", "등락률(%)",
+            cols = [c for c in ["시장", "종목명", "종목코드", "순위", "단계", "등급", "신호일", "종가", "오늘 종가", "등락률(%)",
                                 "통과 선(20개 중)", "매수 신호일", "수익률(%)", "5·10 간격(%)"] if c in df]
             print(df[cols].to_string(index=False))
         else:

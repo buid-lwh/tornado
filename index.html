@@ -53,6 +53,9 @@
   .gR { background: rgba(199,125,255,.15); }
   .tab.rev.on, .gV { border-color: #4cd3e0; color: #4cd3e0; }
   .gV { background: rgba(76,211,224,.15); }
+  .tab.rk1.on, .gK1 { border-color: #ff6b6b; color: #ff6b6b; } .gK1 { background: rgba(255,107,107,.15); }
+  .tab.rk2.on, .gK2 { border-color: #ffd166; color: #ffd166; } .gK2 { background: rgba(255,209,102,.15); }
+  .tab.rk3.on, .gK3 { border-color: #7bdff2; color: #7bdff2; } .gK3 { background: rgba(123,223,242,.15); }
   .price { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
   .close { font-size: 20px; font-weight: 700; }
   .chg { font-size: 14px; font-weight: 600; }
@@ -81,6 +84,9 @@
     <div class="tab on" data-g="all">전체 <span id="nAll"></span></div>
     <div class="tab" data-g="A">A 완전통과 <span id="nA"></span></div>
     <div class="tab" data-g="B">B 중간이상 <span id="nB"></span></div>
+    <div class="tab rk rk1" data-g="K1">1순위 <span id="nK1"></span></div>
+    <div class="tab rk rk2" data-g="K2">2순위 <span id="nK2"></span></div>
+    <div class="tab rk rk3" data-g="K3">3순위 <span id="nK3"></span></div>
     <div class="tab sell" data-g="S">매도 <span id="nS"></span></div>
     <div class="tab r20" data-g="R">20일선 재돌파 <span id="nR"></span></div>
     <div class="tab rev" data-g="V">역배열 돌파 <span id="nV"></span></div>
@@ -91,6 +97,10 @@
   <div class="note">
     · 조건: 종가 &gt; 5 &gt; 10 &gt; 20 &gt; 60일선(지수) 정배열 + 토네이도 1·2번선 겹친 띠를 양봉이 돌파<br>
     · 결과에 나온 종목 = 다음 거래일 매수 후보 (평일 15:50 이후 자동 갱신)<br>
+    · 1순위: 1·2번선 돌파 → 3번선 돌파 → 마지막으로 4번선을 오늘 돌파 (종가가 띠 맨 위를 넘음)<br>
+    · 2순위: 1·2번선 돌파 후 3번선이나 4번선에 처음 닿거나 하단 3% 이내까지 접근 (아직 돌파 전)<br>
+    · 3순위: 1·2순위였던 종목이 단기조정(고점 대비 5% 이상 하락, 최대 20영업일) 후 3·4번선 중 높은 띠를 다시 돌파<br>
+    · 순위 공통: 1·2번선 돌파 신호가 최근 60영업일 안에 있어야 함 (기준 상세는 tornado_rank.py 머리말)<br>
     · 매도: 최근 약 3개월 안에 매수 신호가 났던 종목 중, 오늘 5일선이 10일선 아래로 내려간(데드크로스) 종목<br>
     · 매도 주의: 보유 종목의 5일선이 10일선 위 1% 이내로 좁혀지며 내려오는 중 (데드크로스 직전 경고)<br>
     · 20일선 재돌파: 정배열 → 급락(5·20 데드크로스) → 20·60일선 사이 저점 → 20일선 재돌파 → 1·2번선 20개 중 절반 이상 처음 통과<br>
@@ -139,6 +149,9 @@ function render() {
   $("#meta").textContent = `기준일 ${data["기준일"]} · ${data["검색종목수"].toLocaleString()}종목 검색 · ${data["생성시각"]} 갱신`;
   const R = data["20일선재돌파"], V = data["역배열돌파"];
   $("#nR").textContent = R ? R.length : ""; $("#nV").textContent = V ? V.length : "";
+  const K = data["순위"];
+  for (const r of [1, 2, 3]) $("#nK" + r).textContent = K ? K.filter((x) => x["순위"] === r).length : "";
+  if (grade[0] === "K") return renderRank(K, Number(grade[1]));
   if (grade === "S") return renderSell(S, W, !!data["매도"]);
   if (grade === "R") return renderOther(R, "R");
   if (grade === "V") return renderOther(V, "V");
@@ -236,6 +249,58 @@ const links = (code) => `<div class="links">
         <a href="https://m.stock.naver.com/domestic/stock/${code}/total" target="_blank" rel="noopener">네이버 차트</a>
         <a href="https://finance.daum.net/quotes/A${code}" target="_blank" rel="noopener">다음 증권</a>
       </div>`;
+
+const RK_TITLE = {
+  1: "1순위 · 1·2번선 돌파 → 3번선 돌파 → 4번선 돌파 (마지막 4번선을 오늘 돌파)",
+  2: "2순위 · 1·2번선 돌파 후 3번선/4번선에 터치·근접 (아직 돌파 전)",
+  3: "3순위 · 1·2순위 이후 단기조정(최대 1달) 뒤 3·4번선 재돌파",
+};
+
+function renderRank(all, r) {
+  if (!all) {
+    $("#list").innerHTML = `<div class="empty">이 날짜 결과에는 순위 정보가 없습니다.<br>(순위 검색 도입 이후 날짜부터 나옵니다)</div>`;
+    return;
+  }
+  const rows = all.filter((x) => x["순위"] === r);
+  const head = `<div class="sec">${RK_TITLE[r]} · ${rows.length}종목</div>`;
+  if (!rows.length) {
+    $("#list").innerHTML = head + `<div class="empty">조건에 맞는 종목이 없습니다.</div>`;
+    return;
+  }
+  $("#list").innerHTML = head + rows.map((x) => {
+    const c = x["등락률(%)"], cls = c > 0 ? "var(--up)" : c < 0 ? "var(--down)" : "var(--sub)";
+    const extra = r === 1 ? `
+        <div><b>3번선 돌파</b>${(x["3번 돌파일"] || "").slice(5)}</div>
+        <div><b>4번선 돌파</b>${(x["4번 돌파일"] || "").slice(5)}</div>`
+      : r === 2 ? `
+        <div><b>도달한 선</b>${(x["단계"] || "").replace(" 터치·근접", "")}</div>
+        <div><b>상태</b>터치·근접</div>`
+      : `
+        <div><b>이전 순위</b>${x["이전 순위"] || "-"} (${(x["이전 순위일"] || "").slice(5)})</div>
+        <div><b>조정</b>${x["조정 폭(%)"]}% · ${x["조정 기간(영업일)"]}일</div>`;
+    return `<div class="card">
+      <div class="top">
+        <div class="name">${x["종목명"]}<span class="code">${x["종목코드"]}</span></div>
+        <span class="grade gK${r}">제${r}순위</span>
+      </div>
+      <div class="price">
+        <span class="close">${won(x["종가"])}</span>
+        <span class="chg" style="color:${cls}">${c > 0 ? "+" : ""}${c}%</span>
+        <span class="mkt">${x["시장"]} · ${String(x["신호일"]).slice(5)}</span>
+      </div>
+      <div class="grid">
+        <div><b>1·2번 돌파</b>${(x["1·2번 돌파일"] || "").slice(5)}</div>
+        <div><b>시가</b>${won(x["시가"])}</div>${extra}
+        <div><b>3번선</b>${x["3번선"]}</div>
+        <div><b>4번선</b>${x["4번선"]}</div>
+        <div><b>3번선 상단까지</b>${x["3번선까지(%)"]}%</div>
+        <div><b>4번선 상단까지</b>${x["4번선까지(%)"]}%</div>
+      </div>
+      ${am(x)}
+      ${links(x["종목코드"])}
+    </div>`;
+  }).join("");
+}
 
 function renderOther(rows, kind) {
   if (!rows) {
